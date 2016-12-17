@@ -73,7 +73,7 @@ struct Skin
 {
   bool has_skins;
   std::vector<std::vector<float>> weights;
-  std::vector<Matrix44f> base_inv;
+  std::vector<FbxAMatrix> base_inv;
 };
 
 
@@ -138,8 +138,8 @@ class TestProjectApp
   Skin createSkin(FbxMesh* mesh);
   Material createMaterial(FbxSurfaceMaterial* material);
 
-  TriMesh getDeformedTriMesh(FbxMesh* mesh, const Mesh& src_mesh, FbxNode* parent_node, FbxTime& time);
-  const TriMesh& getTriMesh(FbxMesh* mesh, Mesh& src_mesh, FbxNode* parent_node, FbxTime& time);
+  TriMesh getDeformedTriMesh(FbxMesh* mesh, const Mesh& src_mesh, FbxAMatrix& parent_matrix, FbxTime& time);
+  const TriMesh& getTriMesh(FbxMesh* mesh, Mesh& src_mesh, FbxAMatrix& parent_matix, FbxTime& time);
 
   // TIPS:FBXのデータを再帰的に描画する
   void draw(FbxNode* node, FbxTime& time);
@@ -227,7 +227,7 @@ Mesh TestProjectApp::createMesh(FbxMesh* mesh)
 Skin TestProjectApp::createSkin(FbxMesh* mesh)
 {
   Skin skin_info;
-  skin_info.has_skins = false;;
+  skin_info.has_skins = false;
 
   auto skinCount = mesh->GetDeformerCount(FbxDeformer::eSkin);
   if (skinCount == 0)
@@ -253,7 +253,7 @@ Skin TestProjectApp::createSkin(FbxMesh* mesh)
     return skin_info;
   }
 
-  skin_info.has_skins = true;;
+  skin_info.has_skins = true;
   skin_info.weights.resize(mesh->GetPolygonVertexCount());
 
   for (auto& weights : skin_info.weights)
@@ -264,7 +264,7 @@ Skin TestProjectApp::createSkin(FbxMesh* mesh)
 
   // 初期行列の逆行列
   skin_info.base_inv.resize(clusterCount);
-  
+
   int vtx_indexCount = mesh->GetPolygonVertexCount();
   int* vtx_index     = mesh->GetPolygonVertices();
 
@@ -294,9 +294,10 @@ Skin TestProjectApp::createSkin(FbxMesh* mesh)
       }
     }
 
-    // 初期位置の逆行列を計算しておく
-    FbxNode* node = cluster->GetLink();
-    skin_info.base_inv[i] = getMatrix44(node->EvaluateGlobalTransform(0).Inverse());
+    // 初期状態の逆行列を計算しておく
+    // FbxAMatrix m;
+    // cluster->GetTransformLinkMatrix(m);
+    // skin_info.base_inv[i] = m.Inverse();
   }
 
   return skin_info;
@@ -304,7 +305,7 @@ Skin TestProjectApp::createSkin(FbxMesh* mesh)
 
 
 // ウエイト情報を元にTriMeshの頂点を変形
-TriMesh TestProjectApp::getDeformedTriMesh(FbxMesh* mesh, const Mesh& src_mesh, FbxNode* parent_node, FbxTime& time)
+TriMesh TestProjectApp::getDeformedTriMesh(FbxMesh* mesh, const Mesh& src_mesh, FbxAMatrix& parent_matrix, FbxTime& time)
 {
   TriMesh dst_mesh(src_mesh.tri_mesh);
 
@@ -313,17 +314,30 @@ TriMesh TestProjectApp::getDeformedTriMesh(FbxMesh* mesh, const Mesh& src_mesh, 
 
   std::vector<Matrix44f> matricies(clusterCount);
 
+  // 逆行列を取得
+  FbxAMatrix inv = parent_matrix.Inverse();
+
   for (int i = 0; i < clusterCount; ++i)
   {
+    // 影響を受ける行列を取り出す
+    // FIXME:FBX SDKサンプルコードそのまま。効率悪いので要修正
     FbxCluster* cluster = skin->GetCluster(i);
 
-    // 影響を受ける行列を取り出す
+    FbxAMatrix lReferenceGlobalInitPosition;
+    cluster->GetTransformMatrix(lReferenceGlobalInitPosition);
+
+    FbxAMatrix lClusterGlobalInitPosition;
+		cluster->GetTransformLinkMatrix(lClusterGlobalInitPosition);
+
     FbxNode* node = cluster->GetLink();
-    matricies[i] = getMatrix44(node->EvaluateGlobalTransform(time)) * src_mesh.skin.base_inv[i];
+    FbxAMatrix lClusterGlobalCurrentPosition = node->EvaluateGlobalTransform(time);
+
+    FbxAMatrix lClusterRelativeInitPosition = lClusterGlobalInitPosition.Inverse() * lReferenceGlobalInitPosition;
+		FbxAMatrix lClusterRelativeCurrentPositionInverse = inv * lClusterGlobalCurrentPosition;
+
+    matricies[i] = getMatrix44(lClusterRelativeCurrentPositionInverse * lClusterRelativeInitPosition);
   }
 
-  // 逆行列を取得
-  Matrix44f inv = getMatrix44(parent_node->EvaluateGlobalTransform(time).Inverse());
 
   // 頂点座標を変換
   const auto& src_vtx = src_mesh.tri_mesh.getVertices();
@@ -336,25 +350,25 @@ TriMesh TestProjectApp::getDeformedTriMesh(FbxMesh* mesh, const Mesh& src_mesh, 
     Matrix44f m = matricies[0] * src_mesh.skin.weights[i][0];
     for (int j = 1; j < clusterCount; ++j)
     {
-      m = m + matricies[j] * src_mesh.skin.weights[i][j];
+      if (src_mesh.skin.weights[i][j] == 0.0) continue;
+
+      m += matricies[j] * src_mesh.skin.weights[i][j];
     }
 
-    Matrix44f mi = inv * m;
-
     // 頂点座標と法線を変換
-    dst_vtx[i]  = mi.transformPoint(src_vtx[i]);
-    if (src_mesh.tri_mesh.hasNormals()) dst_norm[i] = mi.transformVec(src_norm[i]);
+    dst_vtx[i]  = m.transformPoint(src_vtx[i]);
+    if (src_mesh.tri_mesh.hasNormals()) dst_norm[i] = m.transformVec(src_norm[i]);
   }
 
   return dst_mesh;
 }
 
 
-const TriMesh& TestProjectApp::getTriMesh(FbxMesh* mesh, Mesh& src_mesh, FbxNode* parent_node, FbxTime& time)
+const TriMesh& TestProjectApp::getTriMesh(FbxMesh* mesh, Mesh& src_mesh, FbxAMatrix& parent_matrix, FbxTime& time)
 {
   if (src_mesh.skin.has_skins)
   {
-    src_mesh.deformed_mesh = getDeformedTriMesh(mesh, src_mesh, parent_node, time);
+    src_mesh.deformed_mesh = getDeformedTriMesh(mesh, src_mesh, parent_matrix, time);
     return src_mesh.deformed_mesh;
   }
   else
@@ -472,22 +486,22 @@ void TestProjectApp::setAnimation(const int index)
 // 描画
 void TestProjectApp::draw(FbxNode* node, FbxTime& time)
 {
-  // 行列
-  FbxAMatrix& matrix = node->EvaluateGlobalTransform(time);
-
-  // １つのノードに複数の属性が関連づけられる
-  int attr_count = node->GetNodeAttributeCount();
-  for (int i = 0; i < attr_count; ++i)
+  // TIPS:見えているノードのみ描画(物理演算用の描画をスキップ)
+  if (node->GetVisibility())
   {
-    FbxNodeAttribute* attr = node->GetNodeAttributeByIndex(i);
-    if (attr)
+    // 行列
+    FbxAMatrix& matrix = node->EvaluateGlobalTransform(time);
+
+    // １つのノードに複数の属性が関連づけられる
+    int attr_count = node->GetNodeAttributeCount();
+    for (int i = 0; i < attr_count; ++i)
     {
+      FbxNodeAttribute* attr = node->GetNodeAttributeByIndex(i);
       switch(attr->GetAttributeType())
       {
       case FbxNodeAttribute::eMesh:
         {
           gl::pushModelView();
-
 
           glMatrixMode(GL_MODELVIEW);
           glMultMatrixd(matrix);
@@ -497,7 +511,7 @@ void TestProjectApp::draw(FbxNode* node, FbxTime& time)
           auto& mesh_info = meshes.at(mesh->GetName());
 
           // スケルタルアニメーションを適用
-          const auto& tri_mesh = getTriMesh(mesh, mesh_info, node, time);
+          const auto& tri_mesh = getTriMesh(mesh, mesh_info, matrix, time);
 
           FbxSurfaceMaterial* material = node->GetMaterial(i);
           const auto& mat = materials.at(material->GetName());
@@ -548,7 +562,7 @@ void TestProjectApp::setup()
                        0.1f, 100.0f);
 
   // TIPS:setEyePoint → setCenterOfInterestPoint の順で初期化すること
-  camera.setEyePoint(Vec3f(0.0f, 0.0f, -6.0f));
+  camera.setEyePoint(Vec3f(0.0f, 0.0f, -4.0f));
   camera.setCenterOfInterestPoint(Vec3f(0.0f, 0.0f, 0.0f));
 
   light = new gl::Light(gl::Light::DIRECTIONAL, 0);
@@ -577,7 +591,7 @@ void TestProjectApp::setup()
 
   // FBXファイルを読み込む
   // TIPS: getAssetPathは、assets内のファイルを探して、フルパスを取得する
-  std::string path = getAssetPath("negimiku.fbx").string();
+  std::string path = getAssetPath("test.fbx").string();
 #ifdef _MSC_VER
   path = getUTF8Path(path);
 #endif
@@ -595,6 +609,8 @@ void TestProjectApp::setup()
   // ファイルからシーンへ読み込む
   importer->Import(scene);
 
+  console() << "Imported." << std::endl;
+
   // FbxImporterはもう使わないのでここで破棄
   importer->Destroy();
 
@@ -605,6 +621,8 @@ void TestProjectApp::setup()
 
   // TIPS:マテリアルごとにメッシュを分離
   geometryConverter.SplitMeshesPerMaterial(scene, true);
+
+  console() << "Converted." << std::endl;
 
   // FBX内の構造を取得しておく
   root_node = scene->GetRootNode();
@@ -649,6 +667,8 @@ void TestProjectApp::setup()
   animation_stack_count = scene->GetSrcObjectCount<FbxAnimStack>();
   console() << "Anim:" << animation_stack_count << std::endl;
   setAnimation(current_animation_stack);
+
+  console() << "Pose:" << scene->GetPoseCount() << std::endl;
 
   // FBS SDKを破棄
   // manager->Destroy();
@@ -699,6 +719,9 @@ void TestProjectApp::draw()
     Matrix44f m = rotate.toMatrix44();
     gl::multModelView(m);
   }
+
+  // gl::translate(0, -1.0, 0);
+  // gl::scale(0.005, 0.005, 0.005);
 
   // 描画
   FbxTime time;
