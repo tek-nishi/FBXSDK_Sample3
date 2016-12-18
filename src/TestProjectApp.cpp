@@ -53,6 +53,17 @@ std::string getUTF8Path(const std::string& path)
 }
 #endif
 
+// FBX SDKサンプルから拝借
+// Get the geometry offset to a node. It is never inherited by the children.
+FbxAMatrix GetGeometry(FbxNode* pNode)
+{
+  const FbxVector4 lT = pNode->GetGeometricTranslation(FbxNode::eSourcePivot);
+  const FbxVector4 lR = pNode->GetGeometricRotation(FbxNode::eSourcePivot);
+  const FbxVector4 lS = pNode->GetGeometricScaling(FbxNode::eSourcePivot);
+
+  return FbxAMatrix(lT, lR, lS);
+}
+
 
 // FbxAMatrix → Matrix44
 Matrix44f getMatrix44(const FbxAMatrix& matrix)
@@ -325,6 +336,9 @@ TriMesh TestProjectApp::getDeformedTriMesh(FbxMesh* mesh, const Mesh& src_mesh, 
 
     FbxAMatrix lReferenceGlobalInitPosition;
     cluster->GetTransformMatrix(lReferenceGlobalInitPosition);
+
+		FbxAMatrix lReferenceGeometry = GetGeometry(mesh->GetNode());
+		lReferenceGlobalInitPosition *= lReferenceGeometry;
 
     FbxAMatrix lClusterGlobalInitPosition;
 		cluster->GetTransformLinkMatrix(lClusterGlobalInitPosition);
