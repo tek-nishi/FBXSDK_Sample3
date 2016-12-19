@@ -463,10 +463,10 @@ Material TestProjectApp::createMaterial(FbxSurfaceMaterial* material)
         // TIPS:テクスチャのパスは絶対パスで格納されているので
         //      余分なディレクトリ名とかを削除している
         // TODO:複数のマテリアルで同じテクスチャが指定されている場合に対応
-        fs::path name = texture->GetFileName();
+        fs::path name = (const char *)(FbxPathUtils::GetFileName(texture->GetFileName()));
 
         // TIPS:画像を読み込んで上下反転
-        Surface surface = loadImage(loadAsset(name.filename()));
+        Surface surface = loadImage(loadAsset(name));
         ip::flipVertical(&surface);
 
         mat.texture = surface;
@@ -734,8 +734,8 @@ void TestProjectApp::draw()
     gl::multModelView(m);
   }
 
-  // gl::translate(0, -1.0, 0);
-  // gl::scale(0.005, 0.005, 0.005);
+  gl::translate(0, -1.0, 0);
+  gl::scale(1, 1, 1);
 
   // 描画
   FbxTime time;
