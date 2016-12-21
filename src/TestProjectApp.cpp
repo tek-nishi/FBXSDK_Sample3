@@ -472,7 +472,7 @@ Material TestProjectApp::createMaterial(FbxSurfaceMaterial* material)
         mat.texture = surface;
         mat.texture->setWrap(GL_REPEAT, GL_REPEAT);
 
-        console() << "texture:" << name.filename() << std::endl;
+        console() << "texture:" << name << std::endl;
       }
     }
   }
